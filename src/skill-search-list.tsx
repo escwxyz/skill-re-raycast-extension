@@ -1,9 +1,10 @@
 import { Action, ActionPanel, Icon, List, showToast, Toast } from "@raycast/api";
 import { useEffect, useState } from "react";
 
-import { searchSkills } from "./api";
-import type { Skill, SkillSort } from "./api";
+import { ApiError, getActiveCredential, listSavedSkills, searchSkills } from "./api";
+import type { AuthCredential, Skill, SkillSort } from "./api";
 import { getErrorMessage } from "./api-error";
+import { validateStoredCredential } from "./credential-validation";
 import type { SkillSearchMode } from "./search-request";
 import { SkillDetail } from "./skill-detail";
 import { SkillActions } from "./skill-actions";
@@ -29,6 +30,7 @@ const SORT_OPTIONS: { title: string; value: SkillSort }[] = [
 
 export const SkillSearchList = ({ searchMode }: SkillSearchListProps) => {
   const [draftQuery, setDraftQuery] = useState("");
+  const [credential, setCredential] = useState<AuthCredential | null>();
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [sort, setSort] = useState<SkillSort>("updated");
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -49,6 +51,33 @@ export const SkillSearchList = ({ searchMode }: SkillSearchListProps) => {
     : isSemanticSearch
       ? "Try describing the capability, workflow, or tool you need."
       : "Try a different keyword, tag, or category.";
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCredential = async () => {
+      try {
+        const activeCredential = await validateStoredCredential({
+          isUnauthorized: (error) => error instanceof ApiError && error.status === 401,
+          load: getActiveCredential,
+          validate: async ({ token }) => await listSavedSkills({ limit: 1, token }),
+        });
+        if (!cancelled) {
+          setCredential(activeCredential);
+        }
+      } catch {
+        if (!cancelled) {
+          setCredential(null);
+        }
+      }
+    };
+
+    void loadCredential();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (isSemanticSearch && !submittedQuery) {
@@ -171,7 +200,13 @@ export const SkillSearchList = ({ searchMode }: SkillSearchListProps) => {
               keywords={keywordsForSkill(skill)}
               subtitle={authorLabelForSkill(skill)}
               title={skill.title}
-              actions={<SkillActions detailTarget={<SkillDetail skill={skill} />} skill={skill} />}
+              actions={
+                <SkillActions
+                  credential={credential}
+                  detailTarget={<SkillDetail credential={credential} skill={skill} />}
+                  skill={skill}
+                />
+              }
             />
           ))}
       {isSemanticQueryPending || isDone ? null : (
