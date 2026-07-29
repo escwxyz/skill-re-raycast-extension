@@ -71,11 +71,13 @@ function AuthorMetadata({ skill }: { skill: Skill }) {
 
 function IdentityMetadata({ fileContent, skill }: Pick<DetailState, "fileContent" | "skill">) {
   const frontmatter = parseSkillMarkdownDocument(fileContent?.content ?? "").frontmatter;
+  const description = frontmatter?.description ?? skill.description;
 
   return (
     <>
       <AuthorMetadata skill={skill} />
       {frontmatter?.name ? <Detail.Metadata.Label title="Name" text={frontmatter.name} /> : null}
+      {description ? <Detail.Metadata.Label title="Description" text={description} /> : null}
       {skill.repoUrl ? (
         <Detail.Metadata.Link title="GitHub" target={skill.repoUrl} text={skill.repoName ?? "Repository"} />
       ) : null}
