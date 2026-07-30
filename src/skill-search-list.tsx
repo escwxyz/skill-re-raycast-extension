@@ -1,10 +1,11 @@
 import { Action, ActionPanel, Icon, List, showToast, Toast } from "@raycast/api";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, getActiveCredential, listSavedSkills, searchSkills } from "./api";
 import type { AuthCredential, Skill, SkillSort } from "./api";
 import { getErrorMessage } from "./api-error";
 import { validateStoredCredential } from "./credential-validation";
+import { createRequestGeneration, invalidatePagination } from "./request-generation";
 import type { SkillSearchMode } from "./search-request";
 import { SkillDetail } from "./skill-detail";
 import { SkillActions } from "./skill-actions";
@@ -37,6 +38,7 @@ export const SkillSearchList = ({ searchMode }: SkillSearchListProps) => {
   const [cursor, setCursor] = useState("");
   const [isDone, setIsDone] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
+  const [paginationGeneration] = useState(createRequestGeneration);
   const isSemanticSearch = searchMode === "semantic";
   const trimmedDraftQuery = draftQuery.trim();
   const requestQuery = isSemanticSearch ? submittedQuery : draftQuery;
@@ -51,6 +53,12 @@ export const SkillSearchList = ({ searchMode }: SkillSearchListProps) => {
     : isSemanticSearch
       ? "Try describing the capability, workflow, or tool you need."
       : "Try a different keyword, tag, or category.";
+
+  const resetPagination = useCallback(() => {
+    const reset = invalidatePagination(paginationGeneration);
+    setCursor(reset.cursor);
+    setIsDone(reset.isDone);
+  }, [paginationGeneration]);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,10 +88,10 @@ export const SkillSearchList = ({ searchMode }: SkillSearchListProps) => {
   }, []);
 
   useEffect(() => {
+    resetPagination();
+
     if (isSemanticSearch && !submittedQuery) {
       setSkills([]);
-      setCursor("");
-      setIsDone(true);
       setIsLoading(false);
       return;
     }
@@ -123,16 +131,15 @@ export const SkillSearchList = ({ searchMode }: SkillSearchListProps) => {
       abort.abort();
       clearTimeout(timeout);
     };
-  }, [isSemanticSearch, requestQuery, searchMode, sort]);
+  }, [isSemanticSearch, requestQuery, resetPagination, searchMode, sort, submittedQuery]);
 
   const submitSemanticSearch = () => {
     if (!trimmedDraftQuery) {
       return;
     }
     setSkills([]);
-    setCursor("");
-    setIsDone(true);
     setIsLoading(true);
+    resetPagination();
     setSubmittedQuery(trimmedDraftQuery);
   };
 
@@ -140,21 +147,49 @@ export const SkillSearchList = ({ searchMode }: SkillSearchListProps) => {
     if (!cursor || isDone) {
       return;
     }
+    paginationGeneration.invalidate();
+    const requestGeneration = paginationGeneration.capture();
     setIsLoading(true);
     try {
       const result = await searchSkills({ cursor, limit: 25, query: requestQuery, searchMode, sort });
+      if (!paginationGeneration.isCurrent(requestGeneration)) {
+        return;
+      }
       setSkills((current) => [...current, ...result.page]);
       setCursor(result.continueCursor);
       setIsDone(result.isDone);
     } catch (error) {
-      await showToast({
-        message: getErrorMessage(error),
-        style: Toast.Style.Failure,
-        title: "Could not load more skills",
-      });
+      if (paginationGeneration.isCurrent(requestGeneration)) {
+        await showToast({
+          message: getErrorMessage(error),
+          style: Toast.Style.Failure,
+          title: "Could not load more skills",
+        });
+      }
     } finally {
+      if (paginationGeneration.isCurrent(requestGeneration)) {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const updateDraftQuery = (value: string) => {
+    if (value === draftQuery) {
+      return;
+    }
+    resetPagination();
+    if (isSemanticSearch) {
       setIsLoading(false);
     }
+    setDraftQuery(value);
+  };
+
+  const updateSort = (value: string) => {
+    if (value === sort) {
+      return;
+    }
+    resetPagination();
+    setSort(value as SkillSort);
   };
 
   return (
@@ -162,7 +197,7 @@ export const SkillSearchList = ({ searchMode }: SkillSearchListProps) => {
       isLoading={isLoading}
       searchBarAccessory={
         isSemanticSearch ? undefined : (
-          <List.Dropdown tooltip="Sort" value={sort} onChange={(value) => setSort(value as SkillSort)}>
+          <List.Dropdown tooltip="Sort" value={sort} onChange={updateSort}>
             {SORT_OPTIONS.map((option) => (
               <List.Dropdown.Item key={option.value} title={option.title} value={option.value} />
             ))}
@@ -170,7 +205,7 @@ export const SkillSearchList = ({ searchMode }: SkillSearchListProps) => {
         )
       }
       searchBarPlaceholder={searchBarPlaceholder}
-      onSearchTextChange={setDraftQuery}
+      onSearchTextChange={updateDraftQuery}
     >
       {isSemanticQueryPending ? (
         <List.Item
